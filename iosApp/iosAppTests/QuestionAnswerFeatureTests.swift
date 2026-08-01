@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import XCTest
 @testable import iosApp
 
@@ -120,6 +121,27 @@ final class QuestionAnswerFeatureTests: XCTestCase {
             canNavigateBack: true,
             layoutDirection: .rightToLeft
         ), .pager)
+    }
+
+    @MainActor
+    func testInteractivePopObserverPreservesDelegateAcrossRepeatedInstallation() {
+        let navigationController = UINavigationController(rootViewController: UIViewController())
+        let observer = NativeAnswerInteractivePopObserverController()
+        navigationController.pushViewController(observer, animated: false)
+
+        let gesture = UIPanGestureRecognizer()
+        let originalDelegate = GestureDelegateSpy(shouldBegin: false)
+        gesture.delegate = originalDelegate
+
+        observer.observeInteractivePopGesture(gesture)
+        observer.observeInteractivePopGesture(gesture)
+
+        XCTAssertTrue(gesture.delegate === observer)
+        XCTAssertFalse(observer.gestureRecognizerShouldBegin(gesture))
+        XCTAssertEqual(originalDelegate.shouldBeginCallCount, 1)
+
+        observer.stopObservingInteractivePopGesture()
+        XCTAssertTrue(gesture.delegate === originalDelegate)
     }
 
     @MainActor
@@ -1068,6 +1090,20 @@ final class QuestionAnswerFeatureTests: XCTestCase {
             session: URLSession(configuration: configuration)
         )
         return URLSessionQuestionAnswerRepository(client: client)
+    }
+}
+
+private final class GestureDelegateSpy: NSObject, UIGestureRecognizerDelegate {
+    private let shouldBegin: Bool
+    private(set) var shouldBeginCallCount = 0
+
+    init(shouldBegin: Bool) {
+        self.shouldBegin = shouldBegin
+    }
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        shouldBeginCallCount += 1
+        return shouldBegin
     }
 }
 

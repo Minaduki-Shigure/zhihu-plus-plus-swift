@@ -189,7 +189,7 @@ private struct NativeAnswerInteractivePopBridge: UIViewControllerRepresentable {
     ) {}
 }
 
-private final class NativeAnswerInteractivePopObserverController: UIViewController,
+final class NativeAnswerInteractivePopObserverController: UIViewController,
     UIGestureRecognizerDelegate
 {
     private weak var observedGesture: UIGestureRecognizer?
@@ -206,6 +206,13 @@ private final class NativeAnswerInteractivePopObserverController: UIViewControll
               navigationController.viewControllers.count > 1,
               let gesture = navigationController.interactivePopGestureRecognizer
         else { return }
+        observeInteractivePopGesture(gesture)
+    }
+
+    func observeInteractivePopGesture(_ gesture: UIGestureRecognizer) {
+        guard observedGesture == nil,
+              gesture.delegate !== self
+        else { return }
         observedGesture = gesture
         previousDelegate = gesture.delegate
         gesture.delegate = self
@@ -214,6 +221,10 @@ private final class NativeAnswerInteractivePopObserverController: UIViewControll
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
+        stopObservingInteractivePopGesture()
+    }
+
+    func stopObservingInteractivePopGesture() {
         if observedGesture?.delegate === self {
             observedGesture?.delegate = previousDelegate
         }
@@ -223,7 +234,10 @@ private final class NativeAnswerInteractivePopObserverController: UIViewControll
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard navigationController?.viewControllers.count ?? 0 > 1 else { return false }
-        return previousDelegate?.gestureRecognizerShouldBegin?(gestureRecognizer) ?? true
+        guard let previousDelegate,
+              previousDelegate !== self
+        else { return true }
+        return previousDelegate.gestureRecognizerShouldBegin?(gestureRecognizer) ?? true
     }
 }
 
