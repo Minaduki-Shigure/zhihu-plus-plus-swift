@@ -1,4 +1,4 @@
-name: Build fixed IPA
+name: Build and test fixed IPA
 
 on:
   workflow_dispatch:
@@ -13,7 +13,74 @@ permissions:
   contents: read
 
 jobs:
+  test:
+    name: Run all XCTest
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Show Xcode and simulator versions
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes available
+
+      - name: Select an available iPhone simulator
+        id: simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          xcrun simctl list devices available
+          SIMULATOR_UDID="$(
+            xcrun simctl list devices available |
+              awk -F '[()]' '
+                /^[[:space:]]+iPhone/ && !selected {
+                  print $2
+                  selected = 1
+                }
+              '
+          )"
+
+          if [[ -z "$SIMULATOR_UDID" ]]; then
+            echo "No available iPhone simulator was found." >&2
+            exit 1
+          fi
+
+          printf 'udid=%s\n' "$SIMULATOR_UDID" >> "$GITHUB_OUTPUT"
+          echo "Selected simulator: $SIMULATOR_UDID"
+
+      - name: Run all XCTest
+        shell: bash
+        env:
+          SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p build/iosApp/tests
+          xcodebuild test \
+            -project iosApp/iosApp.xcodeproj \
+            -scheme iosApp \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -parallel-testing-enabled NO \
+            -derivedDataPath build/iosApp/tests/DerivedData \
+            -resultBundlePath build/iosApp/tests/TestResults.xcresult
+
+      - name: Upload XCTest results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ZhihuPlusPlus-XCTest-results-${{ github.run_attempt }}
+          path: build/iosApp/tests/TestResults.xcresult
+          if-no-files-found: warn
+          retention-days: 14
+
   build:
+    name: Build unsigned IPA
     runs-on: macos-26
     timeout-minutes: 30
 
