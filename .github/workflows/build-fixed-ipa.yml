@@ -61,6 +61,8 @@ jobs:
           set -euo pipefail
 
           mkdir -p build/iosApp/tests
+          LOG_PATH="build/iosApp/tests/xcodebuild.log"
+          set +e
           xcodebuild test \
             -project iosApp/iosApp.xcodeproj \
             -scheme iosApp \
@@ -69,14 +71,30 @@ jobs:
             -destination-timeout 120 \
             -parallel-testing-enabled NO \
             -derivedDataPath build/iosApp/tests/DerivedData \
-            -resultBundlePath build/iosApp/tests/TestResults.xcresult
+            -resultBundlePath build/iosApp/tests/TestResults.xcresult \
+            2>&1 | tee "$LOG_PATH"
+          STATUS=${PIPESTATUS[0]}
+          set -e
+
+          if (( STATUS != 0 )); then
+            grep -E '(^|[[:space:]])(error:|fatal error:)|:[0-9]+:[0-9]+: error:|Testing failed:|BUILD FAILED' "$LOG_PATH" |
+              tail -n 50 |
+              while IFS= read -r LINE; do
+                LINE="${LINE//'%'/'%25'}"
+                LINE="${LINE//$'\r'/'%0D'}"
+                echo "::error title=Xcode::$LINE"
+              done || true
+            exit "$STATUS"
+          fi
 
       - name: Upload XCTest results
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
           name: ZhihuPlusPlus-XCTest-results-${{ github.run_attempt }}
-          path: build/iosApp/tests/TestResults.xcresult
+          path: |
+            build/iosApp/tests/TestResults.xcresult
+            build/iosApp/tests/xcodebuild.log
           if-no-files-found: warn
           retention-days: 14
 
@@ -93,9 +111,38 @@ jobs:
         run: xcodebuild -version
 
       - name: Build unsigned IPA
+        shell: bash
         env:
           BUNDLE_ID: com.github.zly2006.zhplus.ios
-        run: ./iosApp/scripts/build-sidestore-ipa.sh
+        run: |
+          set -euo pipefail
+
+          mkdir -p build/iosApp/ci-logs
+          LOG_PATH="build/iosApp/ci-logs/build-sidestore-ipa.log"
+          set +e
+          ./iosApp/scripts/build-sidestore-ipa.sh 2>&1 | tee "$LOG_PATH"
+          STATUS=${PIPESTATUS[0]}
+          set -e
+
+          if (( STATUS != 0 )); then
+            grep -E '(^|[[:space:]])(error:|fatal error:)|:[0-9]+:[0-9]+: error:|BUILD FAILED' "$LOG_PATH" |
+              tail -n 50 |
+              while IFS= read -r LINE; do
+                LINE="${LINE//'%'/'%25'}"
+                LINE="${LINE//$'\r'/'%0D'}"
+                echo "::error title=Xcode::$LINE"
+              done || true
+            exit "$STATUS"
+          fi
+
+      - name: Upload build log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ZhihuPlusPlus-build-log-${{ github.run_attempt }}
+          path: build/iosApp/ci-logs/build-sidestore-ipa.log
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Verify IPA
         run: |
