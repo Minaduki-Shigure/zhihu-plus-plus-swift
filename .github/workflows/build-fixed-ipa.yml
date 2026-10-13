@@ -1,0 +1,159 @@
+name: Build and test fixed IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - 'fix/**'
+    paths:
+      - .github/workflows/build-fixed-ipa.yml
+      - iosApp/**
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Run all XCTest
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Show Xcode and simulator versions
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes available
+
+      - name: Select an available iPhone simulator
+        id: simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          xcrun simctl list devices available
+          SIMULATOR_UDID="$(
+            xcrun simctl list devices available |
+              awk -F '[()]' '
+                /^[[:space:]]+iPhone/ && !selected {
+                  print $2
+                  selected = 1
+                }
+              '
+          )"
+
+          if [[ -z "$SIMULATOR_UDID" ]]; then
+            echo "No available iPhone simulator was found." >&2
+            exit 1
+          fi
+
+          printf 'udid=%s\n' "$SIMULATOR_UDID" >> "$GITHUB_OUTPUT"
+          echo "Selected simulator: $SIMULATOR_UDID"
+
+      - name: Run all XCTest
+        shell: bash
+        env:
+          SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p build/iosApp/tests
+          LOG_PATH="build/iosApp/tests/xcodebuild.log"
+          set +e
+          xcodebuild test \
+            -project iosApp/iosApp.xcodeproj \
+            -scheme iosApp \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -parallel-testing-enabled NO \
+            -derivedDataPath build/iosApp/tests/DerivedData \
+            -resultBundlePath build/iosApp/tests/TestResults.xcresult \
+            2>&1 | tee "$LOG_PATH"
+          STATUS=${PIPESTATUS[0]}
+          set -e
+
+          if (( STATUS != 0 )); then
+            grep -E '(^|[[:space:]])(error:|fatal error:)|:[0-9]+:[0-9]+: error:|Testing failed:|BUILD FAILED' "$LOG_PATH" |
+              tail -n 50 |
+              while IFS= read -r LINE; do
+                LINE="${LINE//'%'/'%25'}"
+                LINE="${LINE//$'\r'/'%0D'}"
+                echo "::error title=Xcode::$LINE"
+              done || true
+            exit "$STATUS"
+          fi
+
+      - name: Upload XCTest results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ZhihuPlusPlus-XCTest-results-${{ github.run_attempt }}
+          path: |
+            build/iosApp/tests/TestResults.xcresult
+            build/iosApp/tests/xcodebuild.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  build:
+    name: Build unsigned IPA
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build unsigned IPA
+        shell: bash
+        env:
+          BUNDLE_ID: com.github.zly2006.zhplus.ios
+        run: |
+          set -euo pipefail
+
+          mkdir -p build/iosApp/ci-logs
+          LOG_PATH="build/iosApp/ci-logs/build-sidestore-ipa.log"
+          set +e
+          ./iosApp/scripts/build-sidestore-ipa.sh 2>&1 | tee "$LOG_PATH"
+          STATUS=${PIPESTATUS[0]}
+          set -e
+
+          if (( STATUS != 0 )); then
+            grep -E '(^|[[:space:]])(error:|fatal error:)|:[0-9]+:[0-9]+: error:|BUILD FAILED' "$LOG_PATH" |
+              tail -n 50 |
+              while IFS= read -r LINE; do
+                LINE="${LINE//'%'/'%25'}"
+                LINE="${LINE//$'\r'/'%0D'}"
+                echo "::error title=Xcode::$LINE"
+              done || true
+            exit "$STATUS"
+          fi
+
+      - name: Upload build log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ZhihuPlusPlus-build-log-${{ github.run_attempt }}
+          path: build/iosApp/ci-logs/build-sidestore-ipa.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Verify IPA
+        run: |
+          IPA="build/iosApp/sidestore/ZhihuPlusPlus-SideStore.ipa"
+          test -s "$IPA"
+          unzip -t "$IPA"
+          shasum -a 256 "$IPA"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v7
+        with:
+          path: build/iosApp/sidestore/ZhihuPlusPlus-SideStore.ipa
+          archive: false
+          if-no-files-found: error
